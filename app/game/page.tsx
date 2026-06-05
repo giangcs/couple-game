@@ -8,7 +8,7 @@ const ROOM_ID = "couple-room";
 
 export default function GamePage() {
   const [players, setPlayers] = useState<any[]>([]);
-const [myCards, setMyCards] = useState<string[]>([]);
+const [myCards, setMyCards] = useState<any[]>([]);
 const [cardCounts, setCardCounts] =
   useState<Record<string, number>>({});
 
