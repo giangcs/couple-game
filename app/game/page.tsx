@@ -11,6 +11,8 @@ export default function GamePage() {
 const [myCards, setMyCards] = useState<any[]>([]);
 const [cardCounts, setCardCounts] =
   useState<Record<string, number>>({});
+  const [blackCard, setBlackCard] =
+  useState<any>(null);
 
   async function loadPlayers() {
     const { data } = await supabase
@@ -21,14 +23,26 @@ const [cardCounts, setCardCounts] =
     setPlayers(data || []);
   }
 
-  async function loadMyCards() {
+async function loadMyCards() {
   const playerId =
     localStorage.getItem("playerId");
 
-  const { data } = await supabase
-    .from("player_hands")
-    .select("*")
-    .eq("player_id", playerId);
+  const { data, error } =
+    await supabase
+      .from("player_hands")
+      .select(`
+        id,
+        white_cards (
+          id,
+          text
+        )
+      `)
+      .eq("player_id", playerId);
+
+  if (error) {
+    console.error(error);
+    return;
+  }
 
   setMyCards(data || []);
 }
@@ -38,35 +52,32 @@ async function drawCard() {
 
   if (!playerId) return;
 
-  const existingTexts =
-    myCards.map(
-      (card) => card.card_text
-    );
+  const { data: cards } =
+    await supabase
+      .from("white_cards")
+      .select("*");
 
-  const availableCards =
-    WHITE_CARDS.filter(
-      (card) =>
-        !existingTexts.includes(card)
-    );
-
-  if (availableCards.length === 0)
-    return;
+  if (!cards?.length) return;
 
   const randomCard =
-    availableCards[
+    cards[
       Math.floor(
-        Math.random() *
-        availableCards.length
+        Math.random() * cards.length
       )
     ];
 
-  await supabase
+  const { error } = await supabase
     .from("player_hands")
     .insert({
       player_id: playerId,
-      card_text: randomCard,
+      white_card_id: randomCard.id,
     });
+
+  if (error) {
+    console.error(error);
+  }
 }
+
 async function loadCardCounts() {
   const { data } = await supabase
     .from("player_hands")
@@ -87,34 +98,66 @@ async function loadCardCounts() {
   setCardCounts(counts);
 }
 
-  useEffect(() => {
-    loadPlayers();
-    loadMyCards();
-    loadCardCounts();
+useEffect(() => {
+  loadPlayers();
+  loadMyCards();
+  loadCardCounts();
+  loadBlackCard();
+}, []);
+useEffect(() => {
+  if (players.length >= 2) {
+    ensureHand();
+  }
+}, [players.length, myCards.length]);
+async function ensureHand() {
+  if (myCards.length >= 7) return;
 
-    const playerId =
-  localStorage.getItem("playerId");
+  const playerId =
+    localStorage.getItem("playerId");
 
-const channel = supabase
-  .channel(`hand-${playerId}`)
-  .on(
-    "postgres_changes",
-    {
-      event: "*",
-      schema: "public",
-      table: "player_hands",
-    },
-    () => {
-      loadMyCards();
-      loadCardCounts();
-    }
-  )
-  .subscribe();
+  const need = 7 - myCards.length;
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  const { data: cards } =
+    await supabase
+      .from("white_cards")
+      .select("*");
+
+  if (!cards) return;
+
+  const shuffled =
+    [...cards].sort(
+      () => Math.random() - 0.5
+    );
+
+  const selected =
+    shuffled.slice(0, need);
+
+  await supabase
+    .from("player_hands")
+    .insert(
+      selected.map((card) => ({
+        player_id: playerId,
+        white_card_id: card.id,
+      }))
+    );
+}
+async function loadBlackCard() {
+  const { data } =
+    await supabase
+      .from("black_cards")
+      .select("*");
+
+  if (!data?.length) return;
+
+  setBlackCard(
+    data[
+      Math.floor(
+        Math.random() *
+        data.length
+      )
+    ]
+  );
+}
 
   if (players.length < 2) {
     return (
@@ -152,9 +195,9 @@ const channel = supabase
   ))}
 </ul>
 
-      <div className="mt-8 border p-6">
-        Tôi không thể sống thiếu _____
-      </div>
+<div className="mt-8 border p-6">
+  {blackCard?.text}
+</div>
 <button
   onClick={drawCard}
   className="border p-2 mt-4"
@@ -169,7 +212,7 @@ const channel = supabase
     key={card.id}
     className="border p-4 mt-2"
   >
-    {card.card_text}
+    {card.white_cards?.text}
   </div>
 ))}
 </div>
