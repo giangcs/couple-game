@@ -120,55 +120,115 @@ async function loadCardCounts() {
 
 useEffect(() => {
   loadPlayers();
+
+  const channel = supabase
+    .channel("players-room")
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "players",
+      },
+      async () => {
+        await loadPlayers();
+        await loadCardCounts();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, []);
+useEffect(() => {
   loadMyCards();
   loadCardCounts();
   loadBlackCard();
 }, []);
 useEffect(() => {
-  if (players.length >= 2) {
+  if (
+    players.length >= 2 &&
+    myCards.length === 0
+  ) {
     ensureHand();
   }
-}, [players.length, myCards.length]);
-async function ensureHand() {
-  if (myCards.length >= 2) return;
-
+}, [players.length]);
+useEffect(() => {
   const playerId =
     localStorage.getItem("playerId");
 
-  const need = 2 - myCards.length;
+  const channel = supabase
+    .channel(`hand-${playerId}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "player_hands",
+      },
+      async () => {
+        await loadMyCards();
+        await loadCardCounts();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, []);
+
+async function ensureHand() {
+  const playerId =
+    localStorage.getItem("playerId");
+
+  if (!playerId) return;
+
+  const { data: player } =
+    await supabase
+      .from("players")
+      .select("hand_initialized")
+      .eq("id", playerId)
+      .single();
+
+  if (
+    player?.hand_initialized
+  ) {
+    return;
+  }
 
   const { data: cards } =
     await supabase
       .from("white_cards")
       .select("*");
 
-  if (!cards) return;
+  if (!cards?.length) return;
 
   const { data: dealtCards } =
-  await supabase
-    .from("player_hands")
-    .select("white_card_id");
+    await supabase
+      .from("player_hands")
+      .select("white_card_id");
 
+  const usedIds =
+    dealtCards?.map(
+      (c) => c.white_card_id
+    ) || [];
 
-const usedIds =
-  dealtCards?.map(
-    (c) => c.white_card_id
-  ) || [];
+  const availableCards =
+    cards.filter(
+      (card) =>
+        !usedIds.includes(card.id)
+    );
 
-const availableCards =
-  cards.filter(
-    (card) =>
-      !usedIds.includes(card.id)
-  );
+  const shuffled =
+    [...availableCards].sort(
+      () => Math.random() - 0.5
+    );
 
-const shuffled =
-  [...availableCards].sort(
-    () => Math.random() - 0.5
-  );
+  const selected =
+    shuffled.slice(0, 2);
 
-const selected =
-  shuffled.slice(0, need);
-  
   await supabase
     .from("player_hands")
     .insert(
@@ -177,9 +237,18 @@ const selected =
         white_card_id: card.id,
       }))
     );
-    await loadMyCards();
-await loadCardCounts();
+
+  await supabase
+    .from("players")
+    .update({
+      hand_initialized: true,
+    })
+    .eq("id", playerId);
+
+  await loadMyCards();
+  await loadCardCounts();
 }
+
 async function loadBlackCard() {
   const { data } =
     await supabase
