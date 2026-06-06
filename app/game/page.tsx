@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { WHITE_CARDS } from "@/lib/cards";
 
 const ROOM_ID = "couple-room";
 
@@ -66,16 +65,21 @@ async function drawCard() {
       )
     ];
 
-  const { error } = await supabase
-    .from("player_hands")
-    .insert({
-      player_id: playerId,
-      white_card_id: randomCard.id,
-    });
+const { data, error } = await supabase
+  .from("player_hands")
+  .insert({
+    player_id: playerId,
+    white_card_id: randomCard.id,
+  })
+  .select();
+
+console.log("insert", data);
 
   if (error) {
     console.error(error);
   }
+  await loadMyCards();
+  await loadCardCounts();
 }
 
 async function loadCardCounts() {
@@ -110,12 +114,12 @@ useEffect(() => {
   }
 }, [players.length, myCards.length]);
 async function ensureHand() {
-  if (myCards.length >= 7) return;
+  if (myCards.length >= 2) return;
 
   const playerId =
     localStorage.getItem("playerId");
 
-  const need = 7 - myCards.length;
+  const need = 2 - myCards.length;
 
   const { data: cards } =
     await supabase
