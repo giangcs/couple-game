@@ -27,10 +27,7 @@ export default function Home() {
       return;
     }
 
-    localStorage.setItem(
-      "playerId",
-      data.id
-    );
+    localStorage.setItem("playerId", data.id);
 
     router.push("/game");
   }
@@ -46,10 +43,7 @@ export default function Home() {
         className="border p-2"
       />
 
-      <button
-        onClick={joinGame}
-        className="border p-2 ml-2"
-      >
+      <button onClick={joinGame} className="border p-2 ml-2">
         Join
       </button>
     </div>
