@@ -10,9 +10,99 @@ export default function GamePage() {
 const [myCards, setMyCards] = useState<any[]>([]);
 const [cardCounts, setCardCounts] =
   useState<Record<string, number>>({});
-  const [blackCard, setBlackCard] =
+  const [currentRound, setCurrentRound] =
   useState<any>(null);
+  const [submissions, setSubmissions] =
+  useState<any[]>([]);
 
+async function loadSubmissions() {
+  if (!currentRound) return;
+
+  const { data, error } =
+    await supabase
+      .from("submissions")
+      .select(`
+        id,
+        player_id,
+        players (
+          name
+        ),
+        white_cards (
+          text
+        )
+      `)
+      .eq(
+        "round_id",
+        currentRound.id
+      );
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  setSubmissions(data || []);
+}
+  async function loadRound() {
+  const { data } =
+    await supabase
+      .from("rounds")
+      .select(`
+        *,
+        black_cards (
+          id,
+          text
+        )
+      `)
+      .eq("room_id", ROOM_ID)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(1)
+      .single();
+
+  setCurrentRound(data);
+}
+async function createRound() {
+  const { data: existing } =
+    await supabase
+      .from("rounds")
+      .select("id")
+      .eq("room_id", ROOM_ID)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(1);
+
+  if (existing?.length) {
+    return;
+  }
+
+  const { data: cards } =
+    await supabase
+      .from("black_cards")
+      .select("*");
+
+  if (!cards?.length) return;
+
+  const random =
+    cards[
+      Math.floor(
+        Math.random() *
+        cards.length
+      )
+    ];
+
+  await supabase
+    .from("rounds")
+    .insert({
+      room_id: ROOM_ID,
+      black_card_id: random.id,
+      status: "submitting",
+    });
+
+  await loadRound();
+}
   async function loadPlayers() {
     const { data } = await supabase
       .from("players")
@@ -117,7 +207,31 @@ async function loadCardCounts() {
 
   setCardCounts(counts);
 }
+useEffect(() => {
+  if (currentRound) {
+    loadSubmissions();
+  }
+}, [currentRound]);
+useEffect(() => {
+  const channel = supabase
+    .channel("submissions")
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "submissions",
+      },
+      async () => {
+        await loadSubmissions();
+      }
+    )
+    .subscribe();
 
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [currentRound]);
 useEffect(() => {
   loadPlayers();
 
@@ -144,14 +258,12 @@ useEffect(() => {
 useEffect(() => {
   loadMyCards();
   loadCardCounts();
-  loadBlackCard();
+  loadRound();
 }, []);
 useEffect(() => {
-  if (
-    players.length >= 2 &&
-    myCards.length === 0
-  ) {
+  if (players.length >= 2) {
     ensureHand();
+    createRound();
   }
 }, [players.length]);
 useEffect(() => {
@@ -178,6 +290,36 @@ useEffect(() => {
     supabase.removeChannel(channel);
   };
 }, []);
+async function submitCard(
+  handCard: any
+) {
+  const playerId =
+    localStorage.getItem("playerId");
+
+  if (
+    !playerId ||
+    !currentRound
+  )
+    return;
+
+  await supabase
+    .from("submissions")
+    .insert({
+      round_id:
+        currentRound.id,
+      player_id: playerId,
+      white_card_id:
+        handCard.white_cards.id,
+    });
+
+  await supabase
+    .from("player_hands")
+    .delete()
+    .eq("id", handCard.id);
+
+  await loadMyCards();
+  await loadCardCounts();
+}
 
 async function ensureHand() {
   const playerId =
@@ -249,24 +391,6 @@ async function ensureHand() {
   await loadCardCounts();
 }
 
-async function loadBlackCard() {
-  const { data } =
-    await supabase
-      .from("black_cards")
-      .select("*");
-
-  if (!data?.length) return;
-
-  setBlackCard(
-    data[
-      Math.floor(
-        Math.random() *
-        data.length
-      )
-    ]
-  );
-}
-
   if (players.length < 2) {
     return (
       <div className="p-10">
@@ -295,16 +419,53 @@ async function loadBlackCard() {
       <ul>
   {players.map((player) => (
     <li key={player.id}>
-      {player.name}
-      {" - "}
-      {cardCounts[player.id] || 0}
-      {" lá"}
-    </li>
+  {player.name}
+  {" - "}
+  {player.score || 0}
+  {" điểm"}
+  {" - "}
+  {cardCounts[player.id] || 0}
+  {" lá"}
+</li>
   ))}
 </ul>
 
 <div className="mt-8 border p-6">
-  {blackCard?.text}
+  {
+    currentRound
+      ?.black_cards?.text
+  }
+</div>
+
+<div className="mt-8">
+  <h2>Bài đã đánh</h2>
+
+  {submissions.map(
+    (submission) => (
+      <div
+        key={submission.id}
+        className="
+          border
+          p-4
+          mt-2
+        "
+      >
+        <b>
+          {
+            submission.players
+              ?.name
+          }
+        </b>
+
+        {" : "}
+
+        {
+          submission.white_cards
+            ?.text
+        }
+      </div>
+    )
+  )}
 </div>
 <button
   onClick={drawCard}
@@ -317,9 +478,17 @@ async function loadBlackCard() {
 
 {myCards.map((card) => (
   <div
-    key={card.id}
-    className="border p-4 mt-2"
-  >
+  key={card.id}
+  onClick={() =>
+    submitCard(card)
+  }
+  className="
+    border
+    p-4
+    mt-2
+    cursor-pointer
+  "
+>
     {card.white_cards?.text}
   </div>
 ))}
