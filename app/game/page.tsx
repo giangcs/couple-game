@@ -58,30 +58,46 @@ async function drawCard() {
 
   if (!cards?.length) return;
 
+const { data: dealtCards } =
+  await supabase
+    .from("player_hands")
+    .select("white_card_id");
+
+const usedIds =
+  dealtCards?.map(
+    (c) => c.white_card_id
+  ) || [];
+
+const availableCards =
+  cards.filter(
+    (card) =>
+      !usedIds.includes(card.id)
+  );
+
+if (
+  availableCards.length === 0
+) {
+  return;
+}
+
   const randomCard =
-    cards[
+    availableCards[
       Math.floor(
-        Math.random() * cards.length
+        Math.random() *
+        availableCards.length
       )
     ];
 
-const { data, error } = await supabase
-  .from("player_hands")
-  .insert({
-    player_id: playerId,
-    white_card_id: randomCard.id,
-  })
-  .select();
+  await supabase
+    .from("player_hands")
+    .insert({
+      player_id: playerId,
+      white_card_id: randomCard.id,
+    });
 
-console.log("insert", data);
-
-  if (error) {
-    console.error(error);
-  }
   await loadMyCards();
   await loadCardCounts();
 }
-
 async function loadCardCounts() {
   const { data } = await supabase
     .from("player_hands")
@@ -128,14 +144,31 @@ async function ensureHand() {
 
   if (!cards) return;
 
-  const shuffled =
-    [...cards].sort(
-      () => Math.random() - 0.5
-    );
+  const { data: dealtCards } =
+  await supabase
+    .from("player_hands")
+    .select("white_card_id");
 
-  const selected =
-    shuffled.slice(0, need);
 
+const usedIds =
+  dealtCards?.map(
+    (c) => c.white_card_id
+  ) || [];
+
+const availableCards =
+  cards.filter(
+    (card) =>
+      !usedIds.includes(card.id)
+  );
+
+const shuffled =
+  [...availableCards].sort(
+    () => Math.random() - 0.5
+  );
+
+const selected =
+  shuffled.slice(0, need);
+  
   await supabase
     .from("player_hands")
     .insert(
@@ -144,6 +177,8 @@ async function ensureHand() {
         white_card_id: card.id,
       }))
     );
+    await loadMyCards();
+await loadCardCounts();
 }
 async function loadBlackCard() {
   const { data } =
