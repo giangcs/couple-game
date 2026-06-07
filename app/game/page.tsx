@@ -15,6 +15,11 @@ export default function GamePage() {
   const [currentRound, setCurrentRound] = useState<any>(null);
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [mySubmission, setMySubmission] = useState<any>(null);
+  const [winnerSubmissions, setWinnerSubmissions] = useState<any[]>([]);
+  const [voteCounts, setVoteCounts] = useState<Record<string, number>>({});
+  const [selectedSubmission, setSelectedSubmission] = useState<string | null>(
+    null,
+  );
   const isSubmitting = currentRound?.status === "submitting";
   const isVoting = currentRound?.status === "voting";
   const isFinished = currentRound?.status === "finished";
@@ -280,6 +285,101 @@ export default function GamePage() {
     await loadMyCards();
     await loadCardCounts();
   }
+  async function voteSubmission(submissionId: string) {
+    const playerId = localStorage.getItem("playerId");
+
+    if (!playerId || !currentRound) return;
+
+    const { data: existing } = await supabase
+      .from("votes")
+      .select("id")
+      .eq("round_id", currentRound.id)
+      .eq("voter_player_id", playerId)
+      .maybeSingle();
+
+    if (existing) {
+      alert("Bạn đã vote");
+      return;
+    }
+
+    await supabase.from("votes").insert({
+      round_id: currentRound.id,
+      voter_player_id: playerId,
+      submission_id: submissionId,
+    });
+
+    await calculateWinner();
+  }
+  async function calculateWinner() {
+    if (!currentRound) return;
+
+    const { data: votes } = await supabase
+      .from("votes")
+      .select("*")
+      .eq("round_id", currentRound.id);
+
+    if (!votes) return;
+
+    if (votes.length < players.length) {
+      return;
+    }
+
+    const counts: Record<string, number> = {};
+
+    votes.forEach((vote) => {
+      counts[vote.submission_id] = (counts[vote.submission_id] || 0) + 1;
+    });
+
+    setVoteCounts(counts);
+
+    const maxVote = Math.max(...Object.values(counts));
+
+    const winners = submissions.filter(
+      (submission) => counts[submission.id] === maxVote,
+    );
+
+    setWinnerSubmissions(winners);
+
+    await awardPoints(winners);
+
+    await supabase
+      .from("rounds")
+      .update({
+        status: "finished",
+      })
+      .eq("id", currentRound.id);
+  }
+  async function awardPoints(winners: any[]) {
+    for (const winner of winners) {
+      const player = players.find((p) => p.id === winner.player_id);
+
+      await supabase
+        .from("players")
+        .update({
+          score: (player?.score || 0) + 1,
+        })
+        .eq("id", winner.player_id);
+    }
+  }
+  async function startNextRound() {
+    await supabase.from("submissions").delete().neq("id", "");
+
+    await supabase.from("votes").delete().neq("id", "");
+
+    setMySubmission(null);
+    setWinnerSubmissions([]);
+    setVoteCounts({});
+
+    const { data: cards } = await supabase.from("black_cards").select("*");
+
+    const random = cards?.[Math.floor(Math.random() * cards.length)];
+
+    await supabase.from("rounds").insert({
+      room_id: ROOM_ID,
+      black_card_id: random.id,
+      status: "submitting",
+    });
+  }
   // ========================================
   // INITIAL LOAD
   // ========================================
@@ -530,26 +630,100 @@ export default function GamePage() {
             <h2>Bình chọn bài thắng</h2>
 
             {submissions.map((submission) => (
-              <button
+              <div
                 key={submission.id}
-                className="
-              block
-              w-full
-              border
-              p-3
-              mt-2
-            "
+                onClick={() => setSelectedSubmission(submission.id)}
+                className={`
+      mt-2
+      p-4
+      cursor-pointer
+      rounded-lg
+      transition-all
+
+      ${
+        selectedSubmission === submission.id
+          ? `
+            border-4
+            border-blue-500
+            bg-blue-100
+            shadow-lg
+          `
+          : `
+            border
+            hover:bg-gray-100
+          `
+      }
+    `}
               >
-                <b>{submission.players?.name}</b>
+                <div className="flex justify-between">
+                  <div>
+                    <b>{submission.players?.name}</b>
 
-                <br />
+                    <div className="mt-2">{submission.white_cards?.text}</div>
+                  </div>
 
-                {submission.white_cards?.text}
-              </button>
+                  {selectedSubmission === submission.id && (
+                    <div className="text-2xl">✅</div>
+                  )}
+                </div>
+              </div>
             ))}
+
+            <button
+              disabled={!selectedSubmission}
+              onClick={() => voteSubmission(selectedSubmission!)}
+              className="
+    w-full
+    mt-4
+    p-3
+    bg-blue-500
+    text-white
+    rounded
+    disabled:opacity-50
+  "
+            >
+              Bình chọn
+            </button>
           </div>
         </div>
       )}
+      {currentRound?.status === "finished" && (
+        <div className="mt-8">
+          <h2>Kết quả vòng này</h2>
+
+          <div className="border p-4">
+            <b>{currentRound?.black_cards?.text}</b>
+          </div>
+
+          {winnerSubmissions.map((winner) => (
+            <div
+              key={winner.id}
+              className="
+            border
+            p-4
+            mt-2
+            bg-green-100
+          "
+            >
+              <div>Người thắng: {winner.players?.name}</div>
+
+              <div>{winner.white_cards?.text}</div>
+
+              <div>Vote: {voteCounts[winner.id]}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        onClick={startNextRound}
+        className="
+    border
+    p-3
+    mt-4
+  "
+      >
+        Round tiếp theo
+      </button>
     </div>
   );
 }
