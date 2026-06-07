@@ -14,6 +14,10 @@ export default function GamePage() {
   const [cardCounts, setCardCounts] = useState<Record<string, number>>({});
   const [currentRound, setCurrentRound] = useState<any>(null);
   const [submissions, setSubmissions] = useState<any[]>([]);
+  const [mySubmission, setMySubmission] = useState<any>(null);
+  const isSubmitting = currentRound?.status === "submitting";
+  const isVoting = currentRound?.status === "voting";
+  const isFinished = currentRound?.status === "finished";
 
   // ========================================
   // LOAD DATA
@@ -44,6 +48,22 @@ export default function GamePage() {
 
     setSubmissions(data || []);
   }
+
+  async function loadMySubmission() {
+    const playerId = localStorage.getItem("playerId");
+
+    if (!playerId || !currentRound) return;
+
+    const { data } = await supabase
+      .from("submissions")
+      .select("*")
+      .eq("round_id", currentRound.id)
+      .eq("player_id", playerId)
+      .maybeSingle();
+
+    setMySubmission(data);
+  }
+
   async function loadRound() {
     const { data } = await supabase
       .from("rounds")
@@ -175,6 +195,8 @@ export default function GamePage() {
     await loadRound();
   }
   async function submitCard(handCard: any) {
+    if (mySubmission) return;
+
     const playerId = localStorage.getItem("playerId");
 
     if (!playerId || !currentRound) return;
@@ -187,8 +209,28 @@ export default function GamePage() {
 
     await supabase.from("player_hands").delete().eq("id", handCard.id);
 
+    const { count } = await supabase
+      .from("submissions")
+      .select("*", {
+        count: "exact",
+        head: true,
+      })
+      .eq("round_id", currentRound.id);
+
+    console.log("submissions:", count, "players:", players.length);
+
+    if (count === players.length) {
+      await supabase
+        .from("rounds")
+        .update({
+          status: "voting",
+        })
+        .eq("id", currentRound.id);
+    }
+
+    await loadSubmissions();
+    await loadMySubmission();
     await loadMyCards();
-    await loadCardCounts();
   }
   async function ensureHand() {
     const playerId = localStorage.getItem("playerId");
@@ -252,20 +294,40 @@ export default function GamePage() {
   useEffect(() => {
     if (currentRound) {
       loadSubmissions();
+      loadMySubmission();
     }
   }, [currentRound]);
   useEffect(() => {
+    if (!currentRound?.id) return;
+
     const channel = supabase
-      .channel("submissions")
+      .channel(`submissions-${currentRound.id}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "submissions",
+          filter: `round_id=eq.${currentRound.id}`,
         },
         async () => {
-          await loadSubmissions();
+          const { data } = await supabase
+            .from("submissions")
+            .select(
+              `
+              id,
+              player_id,
+              players (
+                name
+              ),
+              white_cards (
+                text
+              )
+            `,
+            )
+            .eq("round_id", currentRound.id);
+
+          setSubmissions(data || []);
         },
       )
       .subscribe();
@@ -273,7 +335,7 @@ export default function GamePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentRound]);
+  }, [currentRound?.id]);
   // ========================================
   // RENDER
   // ========================================
@@ -324,6 +386,33 @@ export default function GamePage() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("rounds")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rounds",
+        },
+        async () => {
+          await loadRound();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+  useEffect(() => {
+    if (!currentRound?.id) return;
+
+    loadSubmissions();
+    loadMySubmission();
+  }, [currentRound?.id]);
   // ========================================
   // GAME FLOW
   // ========================================
@@ -375,47 +464,92 @@ export default function GamePage() {
 
       <div className="mt-8 border p-6">{currentRound?.black_cards?.text}</div>
 
-      <div className="mt-8">
-        <h2>Bài đã đánh</h2>
+      {isVoting && (
+        <div className="mt-8">
+          <h2>Bài đã đánh</h2>
 
-        {submissions.map((submission) => (
-          <div
-            key={submission.id}
-            className="
-          border
-          p-4
-          mt-2
-        "
-          >
-            <b>{submission.players?.name}</b>
+          {submissions.map((submission) => (
+            <div key={submission.id} className="border p-4 mt-2">
+              <div className="text-sm text-gray-500">
+                {submission.players?.name}
+              </div>
 
-            {" : "}
-
-            {submission.white_cards?.text}
-          </div>
-        ))}
-      </div>
+              <div className="mt-2">{submission.white_cards?.text}</div>
+            </div>
+          ))}
+        </div>
+      )}
       <button onClick={drawCard} className="border p-2 mt-4">
         Bốc bài
       </button>
-      <div className="mt-6">
-        <h2>Bài của tôi</h2>
+      {isSubmitting && (
+        <div className="mt-6">
+          <h2>Bài của tôi</h2>
 
-        {myCards.map((card) => (
+          {mySubmission && isSubmitting ? (
+            <div className="border p-4 mt-2">
+              Bạn đã đánh bài. Đang chờ người khác...
+            </div>
+          ) : (
+            myCards.map((card) => (
+              <div
+                key={card.id}
+                onClick={() => submitCard(card)}
+                className="
+          border
+          p-4
+          mt-2
+          cursor-pointer
+        "
+              >
+                {card.white_cards?.text}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {isVoting && (
+        <div
+          className="
+      fixed
+      inset-0
+      bg-black/50
+      flex
+      items-center
+      justify-center
+    "
+        >
           <div
-            key={card.id}
-            onClick={() => submitCard(card)}
             className="
-    border
-    p-4
-    mt-2
-    cursor-pointer
-  "
+        bg-white
+        p-6
+        rounded
+        w-[500px]
+      "
           >
-            {card.white_cards?.text}
+            <h2>Bình chọn bài thắng</h2>
+
+            {submissions.map((submission) => (
+              <button
+                key={submission.id}
+                className="
+              block
+              w-full
+              border
+              p-3
+              mt-2
+            "
+              >
+                <b>{submission.players?.name}</b>
+
+                <br />
+
+                {submission.white_cards?.text}
+              </button>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
