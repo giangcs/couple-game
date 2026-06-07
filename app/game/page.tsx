@@ -6,12 +6,18 @@ import { supabase } from "@/lib/supabase";
 const ROOM_ID = "couple-room";
 
 export default function GamePage() {
+  // ========================================
+  // STATE
+  // ========================================
   const [players, setPlayers] = useState<any[]>([]);
   const [myCards, setMyCards] = useState<any[]>([]);
   const [cardCounts, setCardCounts] = useState<Record<string, number>>({});
   const [currentRound, setCurrentRound] = useState<any>(null);
   const [submissions, setSubmissions] = useState<any[]>([]);
 
+  // ========================================
+  // LOAD DATA
+  // ========================================
   async function loadSubmissions() {
     if (!currentRound) return;
 
@@ -59,34 +65,7 @@ export default function GamePage() {
 
     setCurrentRound(data);
   }
-  async function createRound() {
-    const { data: existing } = await supabase
-      .from("rounds")
-      .select("id")
-      .eq("room_id", ROOM_ID)
-      .order("created_at", {
-        ascending: false,
-      })
-      .limit(1);
 
-    if (existing?.length) {
-      return;
-    }
-
-    const { data: cards } = await supabase.from("black_cards").select("*");
-
-    if (!cards?.length) return;
-
-    const random = cards[Math.floor(Math.random() * cards.length)];
-
-    await supabase.from("rounds").insert({
-      room_id: ROOM_ID,
-      black_card_id: random.id,
-      status: "submitting",
-    });
-
-    await loadRound();
-  }
   async function loadPlayers() {
     const { data } = await supabase
       .from("players")
@@ -94,6 +73,19 @@ export default function GamePage() {
       .eq("room_id", ROOM_ID);
 
     setPlayers(data || []);
+  }
+  async function loadCardCounts() {
+    const { data } = await supabase.from("player_hands").select("player_id");
+
+    console.log("hands", data);
+
+    const counts: Record<string, number> = {};
+
+    data?.forEach((row) => {
+      counts[row.player_id] = (counts[row.player_id] || 0) + 1;
+    });
+
+    setCardCounts(counts);
   }
 
   async function loadMyCards() {
@@ -119,6 +111,9 @@ export default function GamePage() {
 
     setMyCards(data || []);
   }
+  // ========================================
+  // GAME ACTIONS
+  // ========================================
   async function drawCard() {
     const playerId = localStorage.getItem("playerId");
 
@@ -151,101 +146,34 @@ export default function GamePage() {
     await loadMyCards();
     await loadCardCounts();
   }
-  async function loadCardCounts() {
-    const { data } = await supabase.from("player_hands").select("player_id");
+  async function createRound() {
+    const { data: existing } = await supabase
+      .from("rounds")
+      .select("id")
+      .eq("room_id", ROOM_ID)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(1);
 
-    console.log("hands", data);
+    if (existing?.length) {
+      return;
+    }
 
-    const counts: Record<string, number> = {};
+    const { data: cards } = await supabase.from("black_cards").select("*");
 
-    data?.forEach((row) => {
-      counts[row.player_id] = (counts[row.player_id] || 0) + 1;
+    if (!cards?.length) return;
+
+    const random = cards[Math.floor(Math.random() * cards.length)];
+
+    await supabase.from("rounds").insert({
+      room_id: ROOM_ID,
+      black_card_id: random.id,
+      status: "submitting",
     });
 
-    setCardCounts(counts);
+    await loadRound();
   }
-  useEffect(() => {
-    if (currentRound) {
-      loadSubmissions();
-    }
-  }, [currentRound]);
-  useEffect(() => {
-    const channel = supabase
-      .channel("submissions")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "submissions",
-        },
-        async () => {
-          await loadSubmissions();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [currentRound]);
-  useEffect(() => {
-    loadPlayers();
-
-    const channel = supabase
-      .channel("players-room")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "players",
-        },
-        async () => {
-          await loadPlayers();
-          await loadCardCounts();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-  useEffect(() => {
-    loadMyCards();
-    loadCardCounts();
-    loadRound();
-  }, []);
-  useEffect(() => {
-    if (players.length >= 2) {
-      ensureHand();
-      createRound();
-    }
-  }, [players.length]);
-  useEffect(() => {
-    const playerId = localStorage.getItem("playerId");
-
-    const channel = supabase
-      .channel(`hand-${playerId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "player_hands",
-        },
-        async () => {
-          await loadMyCards();
-          await loadCardCounts();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
   async function submitCard(handCard: any) {
     const playerId = localStorage.getItem("playerId");
 
@@ -262,7 +190,6 @@ export default function GamePage() {
     await loadMyCards();
     await loadCardCounts();
   }
-
   async function ensureHand() {
     const playerId = localStorage.getItem("playerId");
 
@@ -311,6 +238,101 @@ export default function GamePage() {
     await loadMyCards();
     await loadCardCounts();
   }
+  // ========================================
+  // INITIAL LOAD
+  // ========================================
+  useEffect(() => {
+    loadMyCards();
+    loadCardCounts();
+    loadRound();
+  }, []);
+  // ========================================
+  // REALTIME SUBSCRIPTIONS
+  // ========================================
+  useEffect(() => {
+    if (currentRound) {
+      loadSubmissions();
+    }
+  }, [currentRound]);
+  useEffect(() => {
+    const channel = supabase
+      .channel("submissions")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "submissions",
+        },
+        async () => {
+          await loadSubmissions();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentRound]);
+  // ========================================
+  // RENDER
+  // ========================================
+  useEffect(() => {
+    loadPlayers();
+
+    const channel = supabase
+      .channel("players-room")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "players",
+        },
+        async () => {
+          await loadPlayers();
+          await loadCardCounts();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    const playerId = localStorage.getItem("playerId");
+
+    const channel = supabase
+      .channel(`hand-${playerId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "player_hands",
+        },
+        async () => {
+          await loadMyCards();
+          await loadCardCounts();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+  // ========================================
+  // GAME FLOW
+  // ========================================
+  useEffect(() => {
+    if (players.length >= 2) {
+      ensureHand();
+      createRound();
+    }
+  }, [players.length]);
 
   if (players.length < 2) {
     return (
